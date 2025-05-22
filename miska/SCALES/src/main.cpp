@@ -7,8 +7,8 @@
 #include <BLEScan.h>
 
 // ========== НАСТРОЙКИ ========== //
-const char* ssid = "MGTS_GPON_2357"; // Имя вашей Wi-Fi сети
-const char* password = "HRBPPWRD"; // Пароль от вашей Wi-Fi сети
+const char* ssid = "ssid"; // Имя вашей Wi-Fi сети
+const char* password = "password"; // Пароль от вашей Wi-Fi сети
 const char* mqtt_server = "192.168.1.75"; // IP адрес вашего MQTT брокера
 const char* mqtt_topic_water_intake = "sensors/water_intake"; // Топик для выпитой воды
 const char* mqtt_topic_current_weight = "sensors/current_weight"; // Новый топик для текущего веса
