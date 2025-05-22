@@ -7,30 +7,35 @@
 #include <BLEScan.h>
 
 // ========== НАСТРОЙКИ ========== //
-const char* ssid = "jopa";
-const char* password = "jopa";
-const char* mqtt_server = "192.168.1.75";
-const char* mqtt_topic = "sensors/esp32_data";
+const char* ssid = "MGTS_GPON_2357"; // Имя вашей Wi-Fi сети
+const char* password = "HRBPPWRD"; // Пароль от вашей Wi-fi сети
+const char* mqtt_server = "192.168.1.75"; // IP адрес вашего MQTT брокера
+const char* mqtt_topic = "sensors/esp32_data"; // Топик для отправки данных
 
-const char* target_ble_name = "ESP32_Beacon"; // Имя вашего BLE маяка
+const char* target_ble_name = "ESP32_Beacon"; // Имя вашего BLE маяка (ошейника)
 const int mpu_address = 0x68; // Адрес MPU-6050
 const float accel_sensitivity = 16384.0; // ±2g
+
+const float ACCEL_THRESHOLD = 2.0; // Порог для ускорения
+const long FAST_SEND_INTERVAL = 5000; // 5 секунд
+const long SLOW_SEND_INTERVAL = 15000; // 15 секунд
 // =============================== //
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
-BLEScan* bleScanner;
-int ble_rssi = -100;
-bool ble_beacon_found = false;
 
-class BleAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
-    void onResult(BLEAdvertisedDevice advertisedDevice) {
-      if(advertisedDevice.getName() == target_ble_name) {
-        ble_rssi = advertisedDevice.getRSSI();
-        ble_beacon_found = true;
-      }
-    }
-};
+// BLE Scanner не нужен для ошейника, так как он только маяк
+// BLEScan* bleScanner;
+// int ble_rssi = -100;
+// bool ble_beacon_found = false;
+
+// Для отслеживания времени отправки
+long last_send_time = 0;
+float previous_acceleration = 0.0;
+
+// Класс для BLE-маяка (AdvertisedDeviceCallbacks не нужен, так как не сканируем)
+// Вместо этого используем BLEAdvertising
+BLEAdvertising *pAdvertising;
 
 void setupWifi() {
   delay(10);
@@ -74,13 +79,11 @@ void setupMpu6050() {
   Wire.endTransmission(true);
 }
 
-void setupBle() {
-  BLEDevice::init("");
-  bleScanner = BLEDevice::getScan();
-  bleScanner->setAdvertisedDeviceCallbacks(new BleAdvertisedDeviceCallbacks());
-  bleScanner->setActiveScan(true);
-  bleScanner->setInterval(100);
-  bleScanner->setWindow(99);
+void setupBleBeacon() {
+  BLEDevice::init(target_ble_name); // Инициализируем BLE с именем маяка
+  pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->start();
+  Serial.println("BLE Beacon started with name: " + String(target_ble_name));
 }
 
 int16_t readMpuRegister(uint8_t reg) {
@@ -90,7 +93,6 @@ int16_t readMpuRegister(uint8_t reg) {
   Wire.requestFrom(mpu_address, 2, true);
   return (Wire.read() << 8) | Wire.read();
 }
-
 
 float readAccelerometer() {
   int16_t ax = readMpuRegister(0x3B);
@@ -107,59 +109,47 @@ float readAccelerometer() {
   return acceleration;
 }
 
-void scanBle() {
-  ble_beacon_found = false;
-  BLEScanResults scanResults = bleScanner->start(2, false); // Scan for 2 seconds
-  
-  if (!ble_beacon_found) {
-    ble_rssi = -100; // Default value if beacon not found
-  }
-  
-  bleScanner->clearResults();
-}
-
-/*void sendData(float acceleration, int rssi) {
-  String payload = "{\"accel\":" + String(acceleration, 3) + 
-  ",\"rssi\":" + String(rssi) + 
-  ",\"timestamp\":" + String(millis()/1000) + "}";
+// Изменена функция отправки данных для акселерометра
+void sendAccelerometerData(float acceleration) {
+  String payload = "{";
+  payload += "\"accel\":" + String(acceleration, 3);
+  payload += "}";
   
   mqttClient.publish(mqtt_topic, payload.c_str());
   Serial.println("Sent: " + payload);
-}*/
-
-void sendData(float acceleration, int rssi) {
-  String accelPayload = "{\"accel\":" + String(acceleration, 3) + "}";
-  mqttClient.publish("sensors/accel", accelPayload.c_str(), true); // QoS=1
-  Serial.print("Отправлено: ");
-  Serial.println(accelPayload);
-  
-
-  String rssiPayload = "{\"rssi\":" + String(rssi) + "}";
-  mqttClient.publish("sensors/rssi", rssiPayload.c_str(), true);
-
 }
 
 void setup() {
   setupWifi();
   setupMqtt();
-  reconnectMqtt();
   setupMpu6050();
-  setupBle();
+  setupBleBeacon(); // Инициализация BLE как маяка
+  last_send_time = millis(); // Инициализируем время последней отправки
 }
 
 void loop() {
-  /*if (!mqttClient.connected()) {
+  if (!mqttClient.connected()) {
     reconnectMqtt();
-  }*/
+  }
   mqttClient.loop();
   
-  // Read sensors
-  scanBle();
-  float acceleration = readAccelerometer();
+  float current_acceleration = readAccelerometer();
   
-  // Send data
-  sendData(acceleration, ble_rssi);
+  long current_time = millis();
+  long send_interval;
+
+  if (previous_acceleration > ACCEL_THRESHOLD) {
+    send_interval = FAST_SEND_INTERVAL;
+  } else {
+    send_interval = SLOW_SEND_INTERVAL;
+  }
+
+  if (current_time - last_send_time >= send_interval) {
+    sendAccelerometerData(current_acceleration);
+    last_send_time = current_time;
+  }
   
+  previous_acceleration = current_acceleration; // Обновляем предыдущее значение
   
-  delay(1000); // Send data every 1 second
+  delay(100); // Небольшая задержка, чтобы не загружать процессор слишком сильно
 }
